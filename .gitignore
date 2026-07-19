@@ -1,0 +1,5 @@
+/config/database.php
+/database/migrations/*
+!/database/migrations/.gitkeep
+.DS_Store
+/public/index.php.bak

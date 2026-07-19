@@ -1,0 +1,11 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # تحديد المجلد الرئيسي للمشروع كقاعدة للتوجيه
+    RewriteBase /alkhwarizmi-framework/
+
+    # تحويل الطلبات إلى مجلد public إذا لم تكن لملف حقيقي
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^(.*)$ public/index.php?url=$1 [QSA,L]
+</IfModule>

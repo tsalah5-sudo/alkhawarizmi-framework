@@ -1,0 +1,233 @@
+<?php
+/**
+ * نظام الخوارزمي - الأداة المتكاملة المحدثة (Server, Migrations, CRUD)
+ */
+
+if (php_sapi_name() !== 'cli') {
+    die("هذه الأداة تعمل فقط عبر سطر الأوامر CLI.");
+}
+
+// 📌 [إصلاح الخطأ]: قراءة الأوامر المدخلة من سطر الأوامر أولاً
+if ($argc < 2) {
+    echo "❌ خطأ: يرجى تحديد الأمر.\n";
+    echo "💡 المساعد السريع للأوامر:\n";
+    echo "  1. تشغيل السيرفر المحلي:  php khwarizmi serve\n";
+    echo "  2. إنشاء ملف ترحيل جديد: php khwarizmi make:migration create_users_table\n";
+    echo "  3. تنفيذ الترحيلات كلها:  php khwarizmi migrate\n";
+    echo "  4. توليد لوحة CRUD كاملة:  php khwarizmi [table_name]\n";
+    exit(1);
+}
+
+// تعريف المتغيرات الأساسية المستخرجة من الـ CLI
+$command = trim($argv[1]);
+
+
+// 🌐 محاولة قراءة الإعدادات ديناميكياً من مجلد config
+$configPath = __DIR__ . '/config/database.php';
+$dbSettings = [];
+
+if (file_exists($configPath)) {
+    $dbSettings = require $configPath;
+}
+
+$host = $dbSettings['host'] ?? 'localhost';
+$dbname = $dbSettings['dbname'] ?? null;
+$username = $dbSettings['username'] ?? 'root';
+$password = $dbSettings['password'] ?? '';
+
+// ⚠️ إذا لم يتم العثور على اسم قاعدة البيانات في ملف الإعدادات ولن نشغل السيرفر، نطلبه تفاعلياً
+if (!$dbname && $command !== 'serve') {
+    echo "⚠️ لم يتم العثور على إعدادات قاعدة البيانات في [config/database.php].\n";
+    echo "⌨️ يرجى إدخال اسم قاعدة البيانات (Database Name) للمتابعة: ";
+    $dbname = trim(fgets(STDIN));
+    
+    if (empty($dbname)) {
+        die("❌ خطأ: لا يمكن المتابعة بدون تحديد اسم قاعدة البيانات.\n");
+    }
+}
+
+// تجهيز الـ DSN ديناميكياً
+$dsn = "mysql:host={$host};dbname={$dbname};charset=utf8mb4";
+
+function getDBConnection($dsn, $username, $password) {
+    return new PDO($dsn, $username, $password, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+    ]);
+}
+
+
+// 🌐 [الأمر 1]: تشغيل السيرفر
+if ($command === 'serve') {
+    echo "🚀 جاري تشغيل سيرفر الخوارزمي المحلي على http://localhost:8000 ...\n";
+    passthru('php -S localhost:8000 -t public');
+    exit(0);
+}
+
+// 📂 [الأمر 2]: إنشاء ملف ترحيل جديد
+// 📂 [الأمر 2]: إنشاء ملف ترحيل جديد (محدث بحماية التكرار)
+if ($command === 'make:migration') {
+    $migrationName = $argv[2] ?? null;
+    if (!$migrationName) { die("❌ خطأ: يرجى تحديد اسم الترحيل. مثال: create_users_table\n"); }
+    
+    @mkdir('database/migrations', 0755, true);
+    $filename = 'database/migrations/' . time() . '_' . $migrationName . '.php';
+    
+    preg_match('/create_(.*)_table/', $migrationName, $matches);
+    $targetTable = $matches[1] ?? 'table_name';
+
+    // ✨ تم إضافة IF NOT EXISTS هنا لمنع أخطاء التكرار نهائياً
+    $template = "<?php\n\nreturn [\n    'up' => \"CREATE TABLE IF NOT EXISTS {$targetTable} (\n        id INT AUTO_INCREMENT PRIMARY KEY,\n        name VARCHAR(255) NOT NULL,\n        email VARCHAR(255) NOT NULL UNIQUE,\n        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\",\n\n    'down' => \"DROP TABLE IF EXISTS {$targetTable};\"\n];\n";
+    
+    file_put_contents($filename, $template);
+    echo "✅ تم إنشاء ملف الترحيل بنجاح في: {$filename}\n";
+    exit(0);
+}
+
+// ⚙️ [الأمر 3]: تنفيذ الترحيلات (Migrate)
+// ⚙️ [الأمر 3 المطور بالكامل]: تنفيذ الترحيلات (Migrate)
+if ($command === 'migrate') {
+    try {
+        $db = getDBConnection($dsn, $username, $password);
+        
+        // إنشاء جدول التتبع إن لم يكن موجوداً
+        $db->exec("CREATE TABLE IF NOT EXISTS migrations (id INT AUTO_INCREMENT PRIMARY KEY, migration VARCHAR(255), migrated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
+        
+        // 📌 [إصلاح]: إعادة تعريف المتغيرات المفقودة لقراءة الملفات وقاعدة البيانات
+        $files = glob('database/migrations/*.php');
+        if ($files === false) { $files = []; }
+        
+        $executed = $db->query("SELECT migration FROM migrations")->fetchAll(PDO::FETCH_COLUMN);
+        
+        $count = 0;
+        foreach ($files as $file) {
+            $baseName = basename($file);
+            if (!in_array($baseName, $executed)) {
+                
+                // تضمين ملف الترحيل
+                $migrationData = require $file;
+                $queryUp = '';
+
+                // التحقق من نوع البيانات (مصفوفة أو كائن مجهول)
+             // التحقق من نوع البيانات (مصفوفة أو كائن مجهول)
+                if (is_object($migrationData)) {
+                    if (method_exists($migrationData, 'up')) {
+                        // مررنا الـ $db للدالة لتنفذ استعلاماتها داخلياً إن كانت مصممة لذلك
+                        $queryUp = $migrationData->up($db);
+                    } elseif (isset($migrationData->up)) {
+                        $queryUp = $migrationData->up;
+                    }
+                } elseif (is_array($migrationData)) {
+                    $queryUp = $migrationData['up'] ?? '';
+                }
+
+                // ✨ [التطوير الجديد]: إذا كانت الدالة نفذت الاستعلام داخلياً وأرجعت true أو كانت مصفوفة وأرجعت نصاً
+                if ($queryUp === true || (is_string($queryUp) && !empty($queryUp))) {
+                    
+                    // إذا كان الناتج نصاً (مصفوفة أو كائن يعيد نص)، نفذه هنا
+                    if (is_string($queryUp) && !empty($queryUp)) {
+                        $db->exec($queryUp);
+                    }
+                    
+                    // تسجيل الملف في جدول التتبع لمنع تكراره نهائياً
+                    $stmt = $db->prepare("INSERT INTO migrations (migration) VALUES (?)");
+                    $stmt->execute([$baseName]);
+                    
+                    echo "⚡ تم تنفيذ وتتبع الترحيل بنجاح: {$baseName}\n";
+                    $count++;
+                } else {
+                    // 💡 إذا كانت الدالة لا ترجع شيئاً (void) ولكنها نفذت الكود، نعتبرها ناجحة ونسجلها
+                    if (is_object($migrationData) && method_exists($migrationData, 'up')) {
+                        $stmt = $db->prepare("INSERT INTO migrations (migration) VALUES (?)");
+                        $stmt->execute([$baseName]);
+                        echo "⚡ تم تنفيذ وتتبع الترحيل (تنفيذ داخلي): {$baseName}\n";
+                        $count++;
+                    } else {
+                        echo "⚠️ تنبيه: تعذر قراءة أو تنفيذ استعلام (up) من الملف: {$baseName}\n";
+                    }
+                }
+            }
+        }
+        
+        if ($count === 0) { 
+            echo "✨ قاعدة البيانات محدثة بالفعل. لا توجد ترحيلات جديدة لتنفيذها.\n"; 
+        } else { 
+            echo "✅ نجاح: تم تنفيذ ({$count}) ترحيلات بنجاح في قاعدة البيانات!\n"; 
+        }
+        
+    } catch (Exception $e) {
+        die("❌ خطأ أثناء الهجرة: " . $e->getMessage() . "\n");
+    }
+    exit(0); // إنهاء السكريبت هنا لضمان عدم تسريب الكود لكتلة الـ CRUD
+}
+// 🚀 [الأمر 4]: توليد الـ CRUD التلقائي بناءً على اسم الجدول المرسل
+$tableName = strtolower($command);
+$className = ucfirst($tableName);
+
+try { $db = getDBConnection($dsn, $username, $password); } catch(Exception $e) {
+    echo "⚠️ تنبيه: لم يتم الاتصال بقاعدة البيانات. سيتم التوليد بناءً على حقول افتراضية.\n";
+}
+
+if (isset($db)) {
+    $stmt = $db->query("SHOW COLUMNS FROM {$tableName}");
+    $columns = $stmt->fetchAll();
+} else {
+    $columns = [['Field' => 'id'], ['Field' => 'name'], ['Field' => 'email']];
+}
+
+$fillableColumns = [];
+foreach ($columns as $col) {
+    if (!in_array($col['Field'], ['id', 'created_at', 'updated_at'])) { $fillableColumns[] = $col['Field']; }
+}
+
+@mkdir('app/Controllers', 0755, true); @mkdir("views/{$tableName}", 0755, true);
+
+// توليد ملفات Controller والـ Views والـ Routes تلقائياً
+$controllerContent = "<?php\n\nnamespace App\\Controllers;\n\nclass {$className}Controller extends \\Core\\Controller {\n\n    public function index() {\n        \$db = \\Core\\Database::getInstance()->getConnection();\n        \$stmt = \$db->query('SELECT * FROM {$tableName} ORDER BY id DESC');\n        \$data = \$stmt->fetchAll(\\PDO::FETCH_ASSOC);\n        require_once __DIR__ . '/../../views/{$tableName}/index.view.php';\n    }\n\n    public function create() {\n        require_once __DIR__ . '/../../views/{$tableName}/create.view.php';\n    }\n\n    public function store() {\n        if (\$_SERVER['REQUEST_METHOD'] !== 'POST') { die('Method not allowed'); }\n";
+foreach ($fillableColumns as $field) { $controllerContent .= "        \${$field} = \$_POST['{$field}'] ?? '';\n"; }
+$fieldsStr = implode(', ', $fillableColumns); $placeholders = implode(', ', array_fill(0, count($fillableColumns), '?'));
+$controllerContent .= "        \$db = \\Core\\Database::getInstance()->getConnection();\n        \$stmt = \$db->prepare('INSERT INTO {$tableName} ({$fieldsStr}) VALUES ({$placeholders})');\n";
+$execArray = array_map(function($f) { return "\${$f}"; }, $fillableColumns);
+$controllerContent .= "        \$stmt->execute([" . implode(', ', $execArray) . "]);\n        header('Location: /{$tableName}');\n        exit;\n    }\n\n    public function edit() {\n        \$id = \$_GET['id'] ?? null;\n        if (!\$id) { die('معرف السجل مفقود'); }\n        \$db = \\Core\\Database::getInstance()->getConnection();\n        \$stmt = \$db->prepare('SELECT * FROM {$tableName} WHERE id = ?');\n        \$stmt->execute([\$id]);\n        \$item = \$stmt->fetch(\\PDO::FETCH_ASSOC);\n        if (!\$item) { die('السجل غير موجود'); }\n        require_once __DIR__ . '/../../views/{$tableName}/edit.view.php';\n    }\n\n    public function update() {\n        if (\$_SERVER['REQUEST_METHOD'] !== 'POST') { die('Method not allowed'); }\n        \$id = \$_POST['id'] ?? null;\n";
+foreach ($fillableColumns as $field) { $controllerContent .= "        \${$field} = \$_POST['{$field}'] ?? '';\n"; }
+$updateParts = array_map(function($f) { return "{$f} = ?"; }, $fillableColumns);
+$controllerContent .= "        \$db = \\Core\\Database::getInstance()->getConnection();\n        \$stmt = \$db->prepare('UPDATE {$tableName} SET " . implode(', ', $updateParts) . " WHERE id = ?');\n";
+$updateExecArray = $execArray; $updateExecArray[] = "\$id";
+$controllerContent .= "        \$stmt->execute([" . implode(', ', $updateExecArray) . "]);\n        header('Location: /{$tableName}');\n        exit;\n    }\n\n    public function delete() {\n        if (\$_SERVER['REQUEST_METHOD'] !== 'POST') { die('Method not allowed'); }\n        \$id = \$_POST['id'] ?? null;\n        \$db = \\Core\\Database::getInstance()->getConnection();\n        \$stmt = \$db->prepare('DELETE FROM {$tableName} WHERE id = ?');\n        \$stmt->execute([\$id]);\n        header('Location: /{$tableName}');\n        exit;\n    }\n}\n";
+file_put_contents("app/Controllers/{$className}Controller.php", $controllerContent);
+
+$indexView = "<!DOCTYPE html>\n<html lang='ar' dir='rtl'>\n<head><meta charset='UTF-8'><title>إدارة {$className}</title><style>body{font-family:Tahoma;background:#f4f6f9;padding:20px;} .container{background:#fff;padding:20px;border-radius:8px;} table{width:100%;border-collapse:collapse;margin-top:20px;} th,td{padding:12px;border:1px solid #ddd;text-align:right;} th{background:#f8f9fa;} .btn{padding:6px 12px;border-radius:4px;text-decoration:none;color:#fff;font-size:13px;} .btn-add{background:#28a745;margin-bottom:15px;display:inline-block;} .btn-edit{background:#007bff;} .btn-delete{background:#dc3545;border:none;cursor:pointer;}</style></head><body><div class='container'><h2>إدارة لوحة {$className}</h2><a href='/{$tableName}/create' class='btn btn-add'>إضافة سجل جديد +</a><table><thead><tr><th>ID</th>";
+foreach ($fillableColumns as $field) { $indexView .= "<th>{$field}</th>"; }
+$indexView .= "<th>العمليات</th></tr></thead><tbody><?php foreach (\$data as \$item): ?><tr><td><?= \$item['id'] ?></td>";
+foreach ($fillableColumns as $field) { $indexView .= "<td><?= htmlspecialchars(\$item['{$field}']) ?></td>"; }
+$indexView .= "<td><a href='/{$tableName}/edit?id=<?= \$item['id'] ?>' class='btn btn-edit'>تعديل</a> <form action='/{$tableName}/delete' method='POST' onsubmit=\"return confirm('هل أنت متأكد؟')\" style='display:inline;'><input type='hidden' name='id' value='<?= \$item['id'] ?>'><button type='submit' class='btn btn-delete'>حذف</button></form></td></tr><?php endforeach; ?></tbody></table></div></body></html>";
+file_put_contents("views/{$tableName}/index.view.php", $indexView);
+
+$editView = "<!DOCTYPE html>\n<html lang='ar' dir='rtl'>\n<head><meta charset='UTF-8'><title>تعديل {$className}</title><style>body{font-family:Tahoma;background:#f4f6f9;padding:20px;} .form-container{background:#fff;padding:20px;border-radius:8px;max-width:500px;margin:auto;} .form-group{margin-bottom:15px;} .form-group label{display:block;margin-bottom:5px;font-weight:bold;} .form-group input{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;} .btn{padding:10px 15px;border:none;border-radius:4px;cursor:pointer;color:#fff;text-decoration:none;display:inline-block;} .btn-primary{background:#007bff;} .btn-secondary{background:#6c757d;}</style></head><body><div class='form-container'><h2>تعديل السجل #<?= \$item['id'] ?></h2><form action='/{$tableName}/update' method='POST'><input type='hidden' name='id' value='<?= \$item['id'] ?>'>";
+foreach ($fillableColumns as $field) { $editView .= "<div class='form-group'><label>{$field}:</label><input type='text' name='{$field}' value='<?= htmlspecialchars(\$item['{$field}']) ?>' required></div>"; }
+$updateBtn = "<button type='submit' class='btn btn-primary'>تحديث البيانات</button>";
+$editView .= "{$updateBtn} <a href='/{$tableName}' class='btn btn-secondary'>إلغاء</a></form></div></body></html>";
+file_put_contents("views/{$tableName}/edit.view.php", $editView);
+
+$createView = "<!DOCTYPE html>\n<html lang='ar' dir='rtl'>\n<head><meta charset='UTF-8'><title>إضافة سجل</title><style>body{font-family:Tahoma;background:#f4f6f9;padding:20px;} .form-container{background:#fff;padding:20px;border-radius:8px;max-width:500px;margin:auto;} .form-group{margin-bottom:15px;} .form-group label{display:block;margin-bottom:5px;font-weight:bold;} .form-group input{width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;} .btn{padding:10px 15px;border:none;border-radius:4px;cursor:pointer;color:#fff;text-decoration:none;display:inline-block;} .btn-success{background:#28a745;} .btn-secondary{background:#6c757d;}</style></head><body><div class='form-container'><h2>إضافة سجل جديد في {$className}</h2><form action='/{$tableName}/store' method='POST'>";
+foreach ($fillableColumns as $field) { $createView .= "<div class='form-group'><label>{$field}:</label><input type='text' name='{$field}' required></div>"; }
+$createView .= "<button type='submit' class='btn btn-success'>إضافة وحفظ</button> <a href='/{$tableName}' class='btn btn-secondary'>إلغاء</a></form></div></body></html>";
+file_put_contents("views/{$tableName}/create.view.php", $createView);
+
+$routesFile = 'public/index.php';
+if (file_exists($routesFile)) {
+    $currentContent = file_get_contents($routesFile);
+    $currentContent = str_replace(['\Core\Router::dispatch();', '\\Core\\Router::dispatch();'], '', $currentContent);
+    $currentContent = rtrim($currentContent);
+    $routesAppendix = "\n\n// --- Dynamic CRUD Routes for {$tableName} (Auto-Generated) ---\n" .
+                      "\\Core\\Router::get('/{$tableName}', '{$className}Controller@index');\n" .
+                      "\\Core\\Router::get('/{$tableName}/create', '{$className}Controller@create');\n" .
+                      "\\Core\\Router::post('/{$tableName}/store', '{$className}Controller@store');\n" .
+                      "\\Core\\Router::get('/{$tableName}/edit', '{$className}Controller@edit');\n" .
+                      "\\Core\\Router::post('/{$tableName}/update', '{$className}Controller@update');\n" .
+                      "\\Core\\Router::post('/{$tableName}/delete', '{$className}Controller@delete');\n\n" .
+                      "\\Core\\Router::dispatch();\n";
+    file_put_contents($routesFile, $currentContent . $routesAppendix);
+}
+
+echo "✅ نجاح: تم توليد الـ CRUD الشامل لـ [{$tableName}] تلقائياً وبأعلى كفاءة!\n";
