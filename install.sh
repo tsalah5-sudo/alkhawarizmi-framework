@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # تحديد اسم المجلد الافتراضي إذا لم يدخله المستخدم
-PROJECT_NAME=${1:-"alkhwarizmi-app"}
+PROJECT_NAME=${1:-"alkhawarizmi-app"}
 
 echo "🚀 جاري جلب ملفات إطار عمل الخوارزمي v1.0.0..."
 
 # استنساخ المستودع مباشرة باستخدام git clone لتجنب مشاكل الـ zip
-if git clone --depth 1 https://github.com/tsalah5-sudo/alkhwarizmi-framework.git "$PROJECT_NAME"; then
+if git clone --depth 1 https://github.com/tsalah5-sudo/alkhawarizmi-framework.git "$PROJECT_NAME"; then
     cd "$PROJECT_NAME" || exit
     
     # حذف مجلد الـ git الخاص بالإطار لكي يبدأ المطور بمستودع نظيف خاص به
